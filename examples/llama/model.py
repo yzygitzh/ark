@@ -364,6 +364,10 @@ class Attention(ark.Module):
     ):
         bsz, seqlen, _ = x.shape()
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        self.out1 = x
+        # self.out2 = self.wq.weight
+        self.out3 = xq
+
         # xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         # xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
         # xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
@@ -374,6 +378,7 @@ class Attention(ark.Module):
         xv = ark.reshape(
             xv, [bsz, seqlen, self.n_local_kv_heads, self.head_dim]
         )
+
         if freqs_cis is not None:
             xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
         # TODO: enable kv cache later
@@ -442,6 +447,7 @@ class TransformerBlock(ark.Module):
     ):
         attention_norm_x = self.attention_norm(x)
         h = self.attention.forward(attention_norm_x, start_pos, freqs_cis, mask)
+        # self.out = h
         h = ark.add(x, h)
         out = ark.add(h, self.feed_forward(self.ffn_norm(h)))
         return out
@@ -485,6 +491,7 @@ class Transformer(ark.Module):
         mask: Optional[ark.Tensor],
     ):
         h = self.tok_embeddings(tokens)
+        self.h_debug = h
 
         for layer in self.layers:
             h = layer(h, start_pos, freqs_cis, mask)

@@ -43,7 +43,8 @@ class Generator:
         assert world_size == 1
         self.local_rank = local_rank
         self.world_size = world_size
-        self.seq_len = seq_len
+        # self.seq_len = seq_len
+        self.seq_len = 16
 
         self.tokenizer: Tokenizer = None
 
@@ -95,6 +96,7 @@ class Generator:
         ark.set_rank(self.local_rank)
         ark.set_world_size(self.world_size)
         module = Transformer(self.args, dtype_ark, local_rank=self.local_rank, world_size=self.world_size)
+        self.module = module
 
         self.logits = module.forward(self.tokens, start_pos, self.freqs_cis, self.mask)
 
@@ -115,33 +117,34 @@ class Generator:
         module.load_state_dict(state_dict)
         self.freqs_cis.from_numpy(freqs_cis_np)
         self.mask.from_numpy(mask_np)
-        self.logits_debug_np = np.ones([1, 2048, 32000])
-        self.logits.from_numpy(self.logits_debug_np)
-        print('freqs_cis_np', freqs_cis_np)
-        print('mask_np', mask_np)
-        print('logits_debug_np', self.logits_debug_np)
+        print('freqs_cis_np', freqs_cis_np.shape, freqs_cis_np)
+        print('mask_np', mask_np.shape, mask_np)
 
     @torch.inference_mode()
     def run(self, prompt: str):
-        prompt_ids = self.tokenizer.encode(prompt, bos=True, eos=True)
+        prompt_ids = self.tokenizer.encode(prompt, bos=True, eos=False)
+        print('prompt_ids', prompt_ids)
+        print(self.seq_len - len(prompt_ids))
         input_ids = np.array([prompt_ids + [self.tokenizer.pad_id] * (self.seq_len - len(prompt_ids))])
-        print('input_ids', input_ids)
-        print('input_ids.shape', input_ids.shape)
+        print('input_ids', input_ids.shape, input_ids)
 
         output_ids = []
-        for cur_pos in range(len(prompt_ids), self.seq_len):
+        for cur_pos in range(len(prompt_ids), len(prompt_ids) + 1):
             self.tokens.from_numpy(input_ids)
-            logits = self.logits.to_numpy()
-            print('asdf', logits.shape, logits, logits[0, cur_pos - 1, :])
             self.runtime.run()
             logits = self.logits.to_numpy()
-            print('sdfa', logits.shape, logits, logits[0, cur_pos - 1, :])
+            print('logits', logits.shape, logits)
+            print('h_debug', self.module.h_debug.to_numpy().shape, self.module.h_debug.to_numpy())
+            print('out1', self.module.layers[0].attention.out1.to_numpy().shape, self.module.layers[0].attention.out1.to_numpy())
+            print('out2', self.module.layers[0].attention.wq.weight.to_numpy().shape, self.module.layers[0].attention.wq.weight.to_numpy())
+            print('out3', self.module.layers[0].attention.out3.to_numpy().shape, self.module.layers[0].attention.out3.to_numpy())
             next_token = torch.argmax(torch.tensor(logits[0, cur_pos - 1, :], dtype=torch.float32), dim=-1)
-            input_ids[0, cur_pos] = next_token
+            # input_ids[0, cur_pos] = next_token
             if next_token == self.tokenizer.eos_id:
                 break
             output_ids.append(next_token)
-            print('eos_id: %d, output_ids' % self.tokenizer.eos_id, output_ids)
+            print('output_ids', output_ids)
+            break
 
         output_text = self.tokenizer.decode(output_ids)
         return output_text
