@@ -3,6 +3,7 @@
 
 #include "codegen.hpp"
 
+#include <algorithm>
 #include <list>
 
 #include "ark/data_type.hpp"
@@ -10,10 +11,11 @@
 #include "file_io.h"
 #include "logging.h"
 #include "model/model_buffer.hpp"
-#include "model_buffer_manager.hpp"
 #include "model/model_data_type.hpp"
 #include "model/model_op.hpp"
 #include "model/model_tensor.hpp"
+#include "model_buffer_manager.hpp"
+#include "npkit/npkit.hpp"
 #include "range.hpp"
 #include "utils/utils_math.hpp"
 
@@ -75,12 +77,17 @@ class CodeGenerator::Impl {
     size_t num_procs_;
     size_t num_warps_per_proc_;
     std::string code_;
+    bool npkit_enabled_;
+    int npkit_shm_event_count_;
 };
 
 CodeGenerator::Impl::Impl(const PlanJson &plan,
                           const std::map<size_t, size_t> &buffer_id_to_offset,
                           const std::string &name)
-    : buffer_id_to_offset_(buffer_id_to_offset), name_(name) {
+    : buffer_id_to_offset_(buffer_id_to_offset),
+      name_(name),
+      npkit_enabled_(get_env().npkit_dump_dir.length() > 0),
+      npkit_shm_event_count_(npkit_enabled_ ? 2 : 0) {
     rank_ = plan.at("Rank");
     world_size_ = plan.at("WorldSize");
     num_procs_ = plan.at("NumProcessors");
@@ -159,6 +166,11 @@ CodeGenerator::Impl::Impl(const PlanJson &plan,
         pg_idx++;
     }
 
+    if (npkit_enabled_ && npkit_shm_event_count_ > 0) {
+        body_ss << NpKit::GetCodeForNpKitFlushEvents();
+        npkit_shm_event_count_ = 0;
+    }
+
     for (auto &kv : sync_state_info) {
         definitions_ss << "__device__ sync::State ARK_LOOP_SYNC_STATE_"
                        << kv.second.id << ";\n";
@@ -177,6 +189,19 @@ CodeGenerator::Impl::Impl(const PlanJson &plan,
         {"@DEFINITIONS@", definitions_ss.str()},
         {"@BODY@", body_ss.str()},
         {"@NAME@", (name_.empty() ? "" : "_" + name_)},
+        {"@NPKIT_ENTRY_PARAMS@",
+         npkit_enabled_ ? NpKit::GetCodeForNpKitEntryParams() : ""},
+        {"@NPKIT_ARK_BODY_PARAMS@",
+         npkit_enabled_ ? NpKit::GetCodeForNpKitArkBodyParams() : ""},
+        {"@NPKIT_ARK_BODY_ARGS@",
+         npkit_enabled_ ? NpKit::GetCodeForNpKitArkBodyArgs() : ""},
+        {"@NPKIT_TASK_SEQ_PARAMS@",
+         npkit_enabled_ ? NpKit::GetCodeForNpKitTaskSeqParams() : ""},
+        {"@NPKIT_INIT@", npkit_enabled_ ? NpKit::GetCodeForNpKitInit() : ""},
+        {"@NPKIT_COLLECT_EVENT_ENTRY@",
+         npkit_enabled_ ? NpKit::GetCodeForNpKitCollectEventEntry() : ""},
+        {"@NPKIT_COLLECT_EVENT_EXIT@",
+         npkit_enabled_ ? NpKit::GetCodeForNpKitCollectEventExit() : ""},
     };
     code_ = replace(template_code, replacements);
 }
@@ -275,7 +300,17 @@ std::string CodeGenerator::Impl::task_seq(
     ss << "task_seq<" << proc_b << ", " << proc_e << ", " << proc_s << ", "
        << proc_cur << ", " << task_b << ", " << task_e << ", " << task_s << ", "
        << task_gran << ", " << num_slots << ", " << slot_num_warps << ", "
-       << slot_sram_bytes << ", t" << task_id << ">(_buf);\n";
+       << slot_sram_bytes << ", t" << task_id << ">(_buf";
+    if (npkit_enabled_) {
+        ss << NpKit::GetCodeForNpKitTaskSeqArgs(NPKIT_EVENT_EXECUTOR_OP_BASE +
+                                                task_id * 2);
+        npkit_shm_event_count_ += 2;
+    }
+    ss << ");\n";
+    if (npkit_enabled_ && npkit_shm_event_count_ == NPKIT_SHM_NUM_EVENTS) {
+        ss << NpKit::GetCodeForNpKitFlushEvents();
+        npkit_shm_event_count_ = 0;
+    }
     return ss.str();
 }
 
@@ -319,8 +354,8 @@ std::string CodeGenerator::Impl::resource_group(
             n_slots = total_warps / num_warps_per_task;
         }
         if (n_slots == 0) {
-            ERR(SchedulerError, "not enough resources for task group: ",
-                tg.dump());
+            ERR(SchedulerError,
+                "not enough resources for task group: ", tg.dump());
         }
 
         size_t task_b = *task_range.begin();

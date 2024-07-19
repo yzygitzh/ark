@@ -76,6 +76,7 @@ static const std::string gpu_compile_command(
     const std::string &code_file_path, const std::string &ark_root,
     const ArchRef arch, [[maybe_unused]] unsigned int max_reg_cnt,
     const std::string &output_file_path) {
+    bool npkit_enabled = (get_env().npkit_dump_dir.length() > 0);
 #if defined(ARK_CUDA)
     if (!arch->belongs_to(ARCH_CUDA)) {
         ERR(InvalidUsageError, "Invalid architecture: ", arch->name());
@@ -97,6 +98,9 @@ static const std::string gpu_compile_command(
     args.emplace_back("-std c++17");
     args.emplace_back("-lcuda");
     args.emplace_back("--define-macro=ARK_TARGET_CUDA_ARCH=" + cc);
+    if (npkit_enabled) {
+        args.emplace_back("--define-macro=ENABLE_NPKIT=1");
+    }
     args.emplace_back("-I" + ark_root + "/include");
     args.emplace_back("-I" + ark_root + "/include/kernels");
     args.emplace_back("-gencode arch=compute_" + cc + ",code=sm_" + cc);
@@ -122,6 +126,9 @@ static const std::string gpu_compile_command(
     args.emplace_back("-std=c++17");
     args.emplace_back("--define-macro=__HIP_PLATFORM_AMD__=1");
     args.emplace_back("--define-macro=ARK_TARGET_ROCM_ARCH=" + cc);
+    if (npkit_enabled) {
+        args.emplace_back("--define-macro=ENABLE_NPKIT=1");
+    }
     args.emplace_back("-I" + ark_root + "/include");
     args.emplace_back("-I" + ark_root + "/include/kernels");
     args.emplace_back("--offload-arch=gfx" + cc);

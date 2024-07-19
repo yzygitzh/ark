@@ -17,6 +17,7 @@
 #define DEFAULT_ARK_IGNORE_BINARY_CACHE true
 #define DEFAULT_ARK_ENFORCE_PLAN_PATH ""
 #define DEFAULT_ARK_MSCCLPP_PORT 50051
+#define DEFAULT_ARK_NPKIT_DUMP_DIR ""
 
 template <typename T>
 T env(const std::string &env_name, const T &default_val) {
@@ -63,6 +64,9 @@ Env::Env() {
                                                DEFAULT_ARK_ENFORCE_PLAN_PATH);
     // Get the port number of MSCCLPP.
     this->mscclpp_port = env<int>("ARK_MSCCLPP_PORT", DEFAULT_ARK_MSCCLPP_PORT);
+    // Get NPKit dump directory.
+    this->npkit_dump_dir =
+        env<std::string>("ARK_NPKIT_DUMP_DIR", DEFAULT_ARK_NPKIT_DUMP_DIR);
 }
 
 // Global Env.

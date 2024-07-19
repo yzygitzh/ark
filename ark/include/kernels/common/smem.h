@@ -8,6 +8,10 @@
 #include "device.h"
 #include "static_math.h"
 
+#if defined(ENABLE_NPKIT)
+#include "npkit.h"
+#endif
+
 extern __shared__ int _ARK_SMEM[];
 
 // should be multiple of 128 and equal to or larger than sync::WarpGroupState
@@ -21,7 +25,13 @@ struct SharedMemory {
         // The smallest warp ID in the uop.
         int least_warp_id = math::gm<NumWarps>(warp_id());
         return math::div<sizeof(int)>(least_warp_id * smem_per_warp +
+#if defined(ENABLE_NPKIT)
+                                      ARK_SMEM_RESERVED_BYTES +
+                                      NPKIT_SHM_NUM_EVENTS *
+                                          sizeof(NpKitEvent));
+#else
                                       ARK_SMEM_RESERVED_BYTES);
+#endif
     }
 
     static DEVICE T *get(int smem_per_warp) {

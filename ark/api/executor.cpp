@@ -25,9 +25,10 @@
 #include "gpu/gpu_manager.hpp"
 #include "logging.h"
 #include "model/model_buffer.hpp"
-#include "model_buffer_manager.hpp"
 #include "model/model_data_type.hpp"
 #include "model/model_tensor.hpp"
+#include "model_buffer_manager.hpp"
+#include "npkit/npkit.hpp"
 #include "utils/utils_net.hpp"
 
 #if defined(ARK_CUDA)
@@ -148,7 +149,7 @@ class Executor::Impl {
     Impl(int device_id, Stream stream, const std::string &name, bool loop_mode);
     ~Impl() = default;
 
-    void init(const PlanJson& plan);
+    void init(const PlanJson &plan);
 
     int device_id() const { return device_id_; }
 
@@ -208,11 +209,18 @@ class Executor::Impl {
         rank_to_proxy_channels_;
     std::map<int, std::vector<std::shared_ptr<mscclpp::SmChannel>>>
         rank_to_sm_channels_;
+
+    std::string npkit_dump_dir_;
+    bool npkit_enabled_;
 };
 
 Executor::Impl::Impl(int device_id, Stream stream, const std::string &name,
                      bool loop_mode)
-    : device_id_(device_id), name_(name), loop_mode_(loop_mode) {
+    : device_id_(device_id),
+      name_(name),
+      loop_mode_(loop_mode),
+      npkit_dump_dir_(get_env().npkit_dump_dir),
+      npkit_enabled_(npkit_dump_dir_.length() > 0) {
     if (device_id < 0) {
         ERR(InvalidUsageError, "Invalid device ID ", device_id);
     }
@@ -288,6 +296,10 @@ void Executor::Impl::init(const PlanJson &plan_json) {
     kernel_ = std::shared_ptr<GpuKernel>(new GpuKernel(
         device_id_, codegen_->code(), {threads_per_block, 1, 1}, {num_sm, 1, 1},
         std::max(smem_block_total, size_t(4)), kernel_name));
+
+    if (npkit_enabled_) {
+        NpKit::Init(device_id_, num_sm);
+    }
 }
 
 void Executor::Impl::init_communicator() {
@@ -712,7 +724,15 @@ void Executor::Impl::launch(int64_t max_spin_count) {
         atomicStoreRelaxed(flag_->ref<int>(), 0);
         void *buf_ptr = buffer_->ref();
         void *flag_ptr = flag_->ref();
+        NpKitEventCollectContext *npkit_context = nullptr;
+        uint64_t *npkit_cpu_timestamp = nullptr;
         std::vector<void *> args = {&buf_ptr, &flag_ptr};
+        if (npkit_enabled_) {
+            npkit_context = NpKit::GetGpuEventCollectContexts();
+            npkit_cpu_timestamp = NpKit::GetCpuTimestamp();
+            args.emplace_back(&npkit_context);
+            args.emplace_back(&npkit_cpu_timestamp);
+        }
         kernel_->launch(stream_raw_, args);
     }
     is_recording_ = true;
@@ -728,7 +748,15 @@ void Executor::Impl::run(int iter) {
     } else {
         void *buf_ptr = buffer_->ref();
         int i = 0;
+        NpKitEventCollectContext *npkit_context = nullptr;
+        uint64_t *npkit_cpu_timestamp = nullptr;
         std::vector<void *> args = {&buf_ptr, reinterpret_cast<void *>(&i)};
+        if (npkit_enabled_) {
+            npkit_context = NpKit::GetGpuEventCollectContexts();
+            npkit_cpu_timestamp = NpKit::GetCpuTimestamp();
+            args.emplace_back(&npkit_context);
+            args.emplace_back(&npkit_cpu_timestamp);
+        }
         for (; i < iter; i++) {
             kernel_->launch(stream_raw_, args);
         }
@@ -785,6 +813,10 @@ float Executor::Impl::stop(int64_t max_spin_count) {
     is_launched_ = false;
     if (world_size_ > 1) {
         proxy_service_->stopProxy();
+    }
+    if (npkit_enabled_) {
+        NpKit::Dump(npkit_dump_dir_);
+        NpKit::Shutdown();
     }
     return elapsed_msec_;
 }

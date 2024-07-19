@@ -31,6 +31,8 @@ struct Env {
     std::string enforce_plan_path;
     // MSCCL++ bootstrap port.
     int mscclpp_port;
+    // NPKit dump directory.
+    std::string npkit_dump_dir;
 };
 
 // Get the global Env.
